@@ -1,0 +1,28 @@
+{
+  "name": "oracledbexec",
+  "version": "1.0.0",
+  "description": "Running Oracle queries made easier",
+  "main": "oracledbexec.js",
+  "scripts": {
+    "test": "node ./test/test.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/thesuhu/oracledbexec.git"
+  },
+  "keywords": [
+    "oracledb",
+    "sql"
+  ],
+  "author": "thesuhu <thesuhu@protonmail.com>",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/thesuhu/oracledbexec/issues"
+  },
+  "homepage": "https://github.com/thesuhu/oracledbexec#readme",
+  "dependencies": {
+    "@thesuhu/colorconsole": "^1.0.5",
+    "bind-sql-string": "^1.2.2",
+    "oracledb": "^5.3.0"
+  }
+}
