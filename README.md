@@ -15,13 +15,13 @@ npm install oracledbexec --save
 
 This module will read seven environment variables. If it doesn't find the related environment variable it will read the default value. Or you can pass database configuration parameters when initializing the module.
 
-ORA_USR: the database user name. (default: `hr`)
-ORA_PWD: the password of the database user. (default: `hr`)
-ORA_CONSTR: connection string `<host>:<port>/<service name>`. (default: `localhost:1521/XEPDB1`)
-POOL_MIN: the number of connections initially created. (default: `10`)
-POOL_MAX: the maximum number of connections. (default: `10`)
-POOL_INCREMENT: the number of connections that are opened whenever a connection request exceeds the number of currently open connections. (default: `0`)
-POOL_ALIAS: is used to explicitly add pools to the connection pool cache. (default: `default`)
+* **ORA_USR**: the database user name. (default: `hr`)
+* **ORA_PWD**: the password of the database user. (default: `hr`)
+* **ORA_CONSTR**: connection string `<host>:<port>/<service name>`. (default: `localhost:1521/XEPDB1`)
+* **POOL_MIN**: the number of connections initially created. (default: `10`)
+* **POOL_MAX**: the maximum number of connections. (default: `10`)
+* **POOL_INCREMENT**: the number of connections that are opened whenever a connection request exceeds the number of currently open connections. (default: `0`)
+* **POOL_ALIAS**: is used to explicitly add pools to the connection pool cache. (default: `default`)
 
 # Usage
 
