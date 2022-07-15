@@ -1,18 +1,52 @@
 const oracledb = require('oracledb')
 const { queryBindToString } = require('bind-sql-string')
-const { sqlLogConsole } = require('@thesuhu/colorconsole')
+const { logConsole, errorConsole, sqlLogConsole } = require('@thesuhu/colorconsole')
 const env = process.env.NODE_ENV || 'dev'
+const poolClosingTime = process.env.POOL_CLOSING_TIME || 0 // 0 = force close, use 10 (seconds) to avoid force close
 
 const dbconfig = {
     user: process.env.ORA_USR || 'hr',
     password: process.env.ORA_PWD || 'hr',
-    connectString: process.env.ORA_CONSTR || 'localhost:1521/XEPDB1'
+    connectString: process.env.ORA_CONSTR || 'localhost:1521/XEPDB1',
+    poolMin: process.env.POOL_MIN || 10, // minimum pool size
+    poolMax: process.env.POOL_MAX || 10, // maximum pool size
+    poolIncrement: process.env.POOL_INCREMENT || 0, // 0 = pool is not incremental
+    poolAlias: process.env.POOL_ALIAS || 'default', // optional pool alias
+}
+
+const defaultThreadPoolSize = 4 // default thread pool size
+process.env.UV_THREADPOOL_SIZE = dbconfig.poolMax + defaultThreadPoolSize // Increase thread pool size by poolMax
+
+// create pool
+exports.initialize = async function initialize(customConfig) {
+    try {
+        if (customConfig) {
+            await oracledb.createPool(customConfig)
+            logConsole('pool created: ' + customConfig.poolAlias)
+        } else {
+            await oracledb.createPool(dbconfig)
+            logConsole('pool created: ' + dbconfig.poolAlias)
+        }
+    } catch (err) {
+        errorConsole(err.message)
+    }
+}
+
+// close pool
+exports.close = async function close() {
+    await oracledb.getPool().close(poolClosingTime) 
 }
 
 // single query
-exports.oraexec = function (sql, param) {
+exports.oraexec = function (sql, param, poolAlias) {
     return new Promise((resolve, reject) => {
-        oracledb.getConnection(dbconfig, function (err, connection) {
+        let pool
+        if (poolAlias) {
+            pool = oracledb.getPool(poolAlias)
+        } else {
+            pool = oracledb.getPool('default')
+        }
+        pool.getConnection((err, connection) => {
             if (err) {
                 reject(err)
                 return
@@ -40,28 +74,33 @@ exports.oraexec = function (sql, param) {
 }
 
 // multi query
-exports.oraexectrans = function (queries) {
-    var paramCount = queries.length - 1
+exports.oraexectrans = function (queries, poolAlias) {
+    let paramCount = queries.length - 1
     return new Promise((resolve, reject) => {
-        var ressql = []
-        oracledb.getConnection(dbconfig, function (err, connection) {
+        let pool
+        if (poolAlias) {
+            pool = oracledb.getPool(poolAlias)
+        } else {
+            pool = oracledb.getPool('default')
+        }
+        let ressql = []
+        pool.getConnection((err, connection) => {
             if (err) {
                 reject(err)
                 return
             }
-
             function running(count) {
                 if (count <= paramCount && count > -1) {
-                    var query = queries[count]
-                    var sql = query.query
-                    var param = query.parameters
+                    let query = queries[count]
+                    let sql = query.query
+                    let param = query.parameters
 
                     let bindings = queryBindToString(sql, param)
                     if (env === 'dev') {
                         sqlLogConsole(bindings)
                     }
 
-                    var queryId = count
+                    let queryId = count
                     prosesSQL(connection, sql, param, resolve, reject, ressql, queryId, () => {
                         running(count + 1)
                     })
@@ -80,7 +119,7 @@ function prosesSQL(connection, sql, param, resolve, reject, ressql, queryId, cal
     connection.execute(sql, param, {
         outFormat: oracledb.OBJECT,
         autoCommit: false
-    }, function (err, result) {
+    }, (err, result) => {
         if (err) {
             connection.rollback()
             connection.close()
