@@ -1,6 +1,6 @@
 {
   "name": "oracledbexec",
-  "version": "1.2.2",
+  "version": "1.2.3",
   "description": "Running Oracle queries made easier",
   "main": "oracledbexec.js",
   "scripts": {
