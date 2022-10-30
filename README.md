@@ -23,7 +23,7 @@ This module will read seven environment variables. If it doesn't find the relate
 * **POOL_INCREMENT**: the number of connections that are opened whenever a connection request exceeds the number of currently open connections. (default: `0`)
 * **POOL_ALIAS**: is used to explicitly add pools to the connection pool cache. (default: `default`)
 
-# Usage
+## Usage
 
 Initialize database in `index.js/app.js` file, to create connection pool and cache it.
 
@@ -93,9 +93,36 @@ Same as `oraexec`, you can pass the pool alias parameter behind.
 let result = await oraexectrans(queries, 'hrpool')
 ```
 
-If you find this useful, please ⭐ the repository. Any feedback is welcome. 
+This version, adds several methods to handle transactions that require a pause to retrieve variables from other tables. So, we have to manually create a new session for execution of transaction queries.
 
-You can contribute or you want to, feel free to [__Buy me a coffee! :coffee:__](https://saweria.co/thesuhu), I will be really thankfull for anything even if it is a coffee or just a kind comment towards my work, because that helps me a lot.
+**Be careful**, don't forget to close the session under any circumstances or an orphan session occurs.
+
+The sequence is to create a session, execute the query, and close the session. here's an example:
+
+```js
+const { begintrans, exectrans, committrans } = require('oracledbexec')
+try {
+    let session = begintrans()
+
+    let sql = `SELECT country_name FROM countries WHERE country_id=:country_id`
+    let param = {country_id: 'ID'}
+    let result = await exectrans(session, sql, param)
+
+    sql = `INSERT INTO sometable VALUES (name, :country_name)`
+    param = {'Some Name', country_name: results.rows[0].country_name}
+    await exectrans(session, sql, param)
+
+    await committrans(session)
+} catch (err) {
+    console.log(err.message)
+}
+```
+
+That's all.
+
+If you find this useful, please ⭐ the repository. Any feedback is welcome.
+
+You can contribute or you want to, feel free to [**Buy me a coffee! :coffee:**](https://saweria.co/thesuhu), I will be really thankfull for anything even if it is a coffee or just a kind comment towards my work, because that helps me a lot.
 
 ## License
 

@@ -34,7 +34,7 @@ exports.initialize = async function initialize(customConfig) {
 
 // close pool
 exports.close = async function close() {
-    await oracledb.getPool().close(poolClosingTime) 
+    await oracledb.getPool().close(poolClosingTime)
 }
 
 // single query
@@ -53,7 +53,7 @@ exports.oraexec = function (sql, param, poolAlias) {
             }
 
             let bindings = queryBindToString(sql, param)
-            if (env === 'dev') {
+            if (env.includes('dev', 'devel', 'development')) {
                 sqlLogConsole(bindings)
             }
 
@@ -96,7 +96,7 @@ exports.oraexectrans = function (queries, poolAlias) {
                     let param = query.parameters
 
                     let bindings = queryBindToString(sql, param)
-                    if (env === 'dev') {
+                    if (env.includes('dev', 'devel', 'development')) {
                         sqlLogConsole(bindings)
                     }
 
@@ -146,4 +146,75 @@ function completeSQL(connection) {
     }
     connection.commit()
     connection.close()
+}
+
+// create session
+exports.begintrans = function (poolAlias) {
+    return new Promise((resolve, reject) => {
+        let pool
+        if (poolAlias) {
+            pool = oracledb.getPool(poolAlias)
+        } else {
+            pool = oracledb.getPool('default')
+        }
+        pool.getConnection((err, connection) => {
+            if (err) {
+                reject(err)
+                return
+            }
+
+            let bindings = 'begin transaction'
+            if (env.includes('dev', 'devel', 'development')) {
+                sqlLogConsole(bindings)
+            }
+
+            resolve(connection);
+        })
+
+    })
+}
+
+// exec with manual session
+exports.exectrans = function (connection, sql, param) {
+    return new Promise((resolve, reject) => {
+
+        let bindings = queryBindToString(sql, param)
+        if (env.includes('dev', 'devel', 'development')) {
+            sqlLogConsole(bindings)
+        }
+
+        connection.execute(sql, param, {
+            outFormat: oracledb.OBJECT,
+            autoCommit: false
+        }, function (err, result) {
+            if (err) {
+                connection.rollback()
+                connection.close()
+
+                if (env.includes('dev', 'devel', 'development')) {
+                    sqlLogConsole('rollback transction')
+                }
+
+                reject({
+                    message: err.message
+                })
+                return
+            }
+            resolve(result)
+        })
+    })
+}
+
+// close session
+exports.committrans = function (connection) {
+    return new Promise((resolve) => {
+        connection.commit()
+        let bindings = 'commit transaction'
+
+        if (env.includes('dev', 'devel', 'development')) {
+            sqlLogConsole(bindings)
+        }
+        connection.close()
+        resolve()
+    })
 }
