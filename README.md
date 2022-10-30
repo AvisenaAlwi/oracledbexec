@@ -93,9 +93,11 @@ Same as `oraexec`, you can pass the pool alias parameter behind.
 let result = await oraexectrans(queries, 'hrpool')
 ```
 
+### Addition
+
 This version, adds several methods to handle transactions that require a pause to retrieve variables from other tables. So, we have to manually create a new session for execution of transaction queries.
 
-**Be careful**, don't forget to close the session under any circumstances or an orphan session occurs.
+**Be careful**, if you use this method, don't forget to close the session under any circumstances or an orphan session occurs.
 
 The sequence is to create a session, execute the query, and close the session. here's an example:
 
@@ -116,6 +118,12 @@ try {
 } catch (err) {
     console.log(err.message)
 }
+```
+
+Of course, you can pass the pool alias parameter when create a session.
+
+```js
+let result = await begintrans('hrpool')
 ```
 
 That's all.
