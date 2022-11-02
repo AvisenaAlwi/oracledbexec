@@ -78,9 +78,9 @@ const { oraexec, oraexectrans } = require('oracledbexec')
 
 try {
     let queries = []
-    queries.push({query: `INSERT INTO countries VALUES (:nama)`, parameters: {country_id: 'ID', country_name: 'Indonesia'}})
-    queries.push({query: `INSERT INTO countries VALUES (:nama)`, parameters: {country_id: 'JP', country_name: 'Japan'}})
-    queries.push({query: `INSERT INTO countries VALUES (:nama)`, parameters: {country_id: 'CN', country_name: 'China'}})
+    queries.push({query: `INSERT INTO countries VALUES (:country_id, :country_name)`, parameters: {country_id: 'ID', country_name: 'Indonesia'}})
+    queries.push({query: `INSERT INTO countries VALUES (:country_id, :country_name)`, parameters: {country_id: 'JP', country_name: 'Japan'}})
+    queries.push({query: `INSERT INTO countries VALUES (:country_id, :country_name)`, parameters: {country_id: 'CN', country_name: 'China'}})
     await oraexectrans(queries)
 } catch (err) {
     console.log(err.message)
@@ -93,9 +93,9 @@ Same as `oraexec`, you can pass the pool alias parameter behind.
 let result = await oraexectrans(queries, 'hrpool')
 ```
 
-### Addition
+In the above explanation, all sessions are created automatically. we simply call the method for query execution. If you want to handle separate sessions, follow these instructions.
 
-This version, adds several methods to handle transactions that require a pause to retrieve variables from other tables. So, we have to manually create a new session for execution of transaction queries.
+If you to handle handle transactions that require a pause to retrieve variables from other tables. So, we have to manually create a new session for execution of transaction queries.
 
 **Be careful**, if you use this method, don't forget to close the session under any circumstances or an orphan session occurs.
 
@@ -111,8 +111,8 @@ try {
     let param = {country_id: 'ID'}
     let result = await exectrans(session, sql, param)
 
-    sql = `INSERT INTO sometable VALUES (name, :country_name)`
-    param = {'Some Name', country_name: results.rows[0].country_name}
+    sql = `INSERT INTO sometable VALUES (:name, :country_name)`
+    param = {name: 'Some Name', country_name: results.rows[0].country_name}
     await exectrans(session, sql, param)
 
     await committrans(session)
