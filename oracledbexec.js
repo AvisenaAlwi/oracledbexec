@@ -8,10 +8,14 @@ const dbconfig = {
     user: process.env.ORA_USR || 'hr',
     password: process.env.ORA_PWD || 'hr',
     connectString: process.env.ORA_CONSTR || 'localhost:1521/XEPDB1',
-    poolMin: process.env.POOL_MIN || 10, // minimum pool size
-    poolMax: process.env.POOL_MAX || 10, // maximum pool size
-    poolIncrement: process.env.POOL_INCREMENT || 0, // 0 = pool is not incremental
+    poolMin: parseInt(process.env.POOL_MIN, 10) || 10, // minimum pool size
+    poolMax: parseInt(process.env.POOL_MAX, 10) || 10, // maximum pool size
+    poolIncrement: parseInt(process.env.POOL_INCREMENT, 10) || 0, // 0 = pool is not incremental
     poolAlias: process.env.POOL_ALIAS || 'default', // optional pool alias
+    poolPingInterval: parseInt(process.env.POOL_PING_INTERVAL, 10) || 60, // check aliveness of connection if idle in the pool for 60 seconds
+    poolTimeout: parseInt(process.env.POOL_TIMEOUT, 10) || 60, // terminate connections that are idle in the pool for 60 seconds
+    queueMax: parseInt(process.env.QUEUE_MAX, 10) || 500, // don't allow more than 500 unsatisfied getConnection() calls in the pool queue
+    queueTimeout: parseInt(process.env.QUEUE_TIMEOUT, 10) || 60000, // terminate getConnection() calls queued for longer than 60000 milliseconds
 }
 
 const defaultThreadPoolSize = 4 // default thread pool size
@@ -167,7 +171,6 @@ exports.begintrans = function (poolAlias) {
             if (env.includes('dev', 'devel', 'development')) {
                 sqlLogConsole(bindings)
             }
-
             resolve(connection);
         })
 
@@ -177,7 +180,6 @@ exports.begintrans = function (poolAlias) {
 // exec with manual session
 exports.exectrans = function (connection, sql, param) {
     return new Promise((resolve, reject) => {
-
         let bindings = queryBindToString(sql, param)
         if (env.includes('dev', 'devel', 'development')) {
             sqlLogConsole(bindings)
@@ -205,11 +207,25 @@ exports.exectrans = function (connection, sql, param) {
     })
 }
 
-// close session
+// commit and close session
 exports.committrans = function (connection) {
     return new Promise((resolve) => {
         connection.commit()
         let bindings = 'commit transaction'
+
+        if (env.includes('dev', 'devel', 'development')) {
+            sqlLogConsole(bindings)
+        }
+        connection.close()
+        resolve()
+    })
+}
+
+// rollback and close session
+exports.rollbacktrans = function (connection) {
+    return new Promise((resolve) => {
+        connection.rollback()
+        let bindings = 'rollback transaction'
 
         if (env.includes('dev', 'devel', 'development')) {
             sqlLogConsole(bindings)

@@ -22,6 +22,8 @@ This module will read seven environment variables. If it doesn't find the relate
 * **POOL_MAX**: the maximum number of connections. (default: `10`)
 * **POOL_INCREMENT**: the number of connections that are opened whenever a connection request exceeds the number of currently open connections. (default: `0`)
 * **POOL_ALIAS**: is used to explicitly add pools to the connection pool cache. (default: `default`)
+* **POOL_PING_INTERVAL**: check aliveness of connection if idle in the pool in second. (default: `60`)
+* **QUEUE_MAX**: the maximum `getConnection()` calls in the pool queue. (default: `500`)
 
 ## Usage
 
@@ -99,10 +101,10 @@ If you to handle handle transactions that require a pause to retrieve variables 
 
 **Be careful**, if you use this method, don't forget to close the session under any circumstances or an orphan session occurs.
 
-The sequence is to create a session, execute the query, and close the session. here's an example:
+The sequence is to create a session, execute the query, and commit the session. here's an example:
 
 ```js
-const { begintrans, exectrans, committrans } = require('oracledbexec')
+const { begintrans, exectrans, committrans, rollbacktrans } = require('oracledbexec')
 
 try {
     let session = begintrans()
@@ -117,6 +119,7 @@ try {
 
     await committrans(session)
 } catch (err) {
+    await rollbacktrans(session)
     console.log(err.message)
 }
 ```
