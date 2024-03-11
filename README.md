@@ -23,7 +23,9 @@ This module will read seven environment variables. If it doesn't find the relate
 * **POOL_INCREMENT**: the number of connections that are opened whenever a connection request exceeds the number of currently open connections. (default: `0`)
 * **POOL_ALIAS**: is used to explicitly add pools to the connection pool cache. (default: `default`)
 * **POOL_PING_INTERVAL**: check aliveness of connection if idle in the pool in second. (default: `60`)
+* **POOL_TIMEOUT**: terminate connections that are idle in the pool for 60 seconds. (default: `120`)
 * **QUEUE_MAX**: the maximum `getConnection()` calls in the pool queue. (default: `500`)
+* **QUEUE_TIMEOUT**: terminate getConnection() calls queued for longer than 60000 milliseconds (default: `60000`)
 
 ## Usage
 
@@ -47,7 +49,11 @@ let dbconfig = {
     poolMin: 10,
     poolMax: 10,
     poolIncrement: 0,
-    poolAlias: 'default'
+    poolAlias: 'default',
+    poolPingInterval: 60,
+    poolTimeout: 120,
+    queueMax: 500,
+    queueTimeout: 60000,
 }
 oracledbexec.initialize(dbconfig)
 ```

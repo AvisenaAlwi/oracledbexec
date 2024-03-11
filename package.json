@@ -1,6 +1,6 @@
 {
   "name": "oracledbexec",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "description": "Running Oracle queries made easier",
   "main": "oracledbexec.js",
   "scripts": {
@@ -23,6 +23,6 @@
   "dependencies": {
     "@thesuhu/colorconsole": "^1.0.5",
     "bind-sql-string": "^1.2.2",
-    "oracledb": "^6.3.0"
+    "oracledb": "^5.5.0"
   }
 }
