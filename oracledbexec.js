@@ -13,7 +13,6 @@ const dbconfig = {
     poolIncrement: parseInt(process.env.POOL_INCREMENT, 10) || 0, // 0 = pool is not incremental
     poolAlias: process.env.POOL_ALIAS || 'default', // optional pool alias
     poolPingInterval: parseInt(process.env.POOL_PING_INTERVAL, 10) || 60, // check aliveness of connection if idle in the pool for 60 seconds
-    poolTimeout: parseInt(process.env.POOL_TIMEOUT, 10) || 60, // terminate connections that are idle in the pool for 60 seconds
     queueMax: parseInt(process.env.QUEUE_MAX, 10) || 500, // don't allow more than 500 unsatisfied getConnection() calls in the pool queue
     queueTimeout: parseInt(process.env.QUEUE_TIMEOUT, 10) || 60000, // terminate getConnection() calls queued for longer than 60000 milliseconds
 }
