@@ -32,6 +32,7 @@ exports.initialize = async function initialize(customConfig) {
         }
     } catch (err) {
         errorConsole(err.message)
+        throw new Error(err.message)
     }
 }
 
