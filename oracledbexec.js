@@ -23,18 +23,19 @@ process.env.UV_THREADPOOL_SIZE = dbconfig.poolMax + defaultThreadPoolSize // Inc
 // create pool
 exports.initialize = async function initialize(customConfig) {
     try {
+        logConsole('Attempting to create pool: ' + (customConfig ? customConfig.poolAlias : dbconfig.poolAlias));
         if (customConfig) {
-            await oracledb.createPool(customConfig)
-            logConsole('pool created: ' + customConfig.poolAlias)
+            await oracledb.createPool(customConfig);
+            logConsole('Pool created: ' + customConfig.poolAlias);
         } else {
-            await oracledb.createPool(dbconfig)
-            logConsole('pool created: ' + dbconfig.poolAlias)
+            await oracledb.createPool(dbconfig);
+            logConsole('Pool created: ' + dbconfig.poolAlias);
         }
     } catch (err) {
-        errorConsole(err.message)
-        throw new Error(err.message)
+        errorConsole('Error creating pool: ' + err.message);
+        throw new Error(err.message);
     }
-}
+};
 
 // close pool
 exports.close = async function close() {
@@ -127,9 +128,7 @@ function prosesSQL(connection, sql, param, resolve, reject, ressql, queryId, cal
         if (err) {
             connection.rollback()
             connection.close()
-            if (env === 'dev') {
-                sqlLogConsole('rollback')
-            }
+            sqlLogConsole('rollback')
             reject({
                 message: err.message
             })
@@ -145,9 +144,7 @@ function prosesSQL(connection, sql, param, resolve, reject, ressql, queryId, cal
 
 // commit
 function completeSQL(connection) {
-    if (env === 'dev') {
-        sqlLogConsole('commit')
-    }
+    sqlLogConsole('commit')
     connection.commit()
     connection.close()
 }
