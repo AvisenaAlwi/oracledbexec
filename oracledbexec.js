@@ -1,4 +1,8 @@
 const oracledb = require('oracledb')
+const thinMode = process.env.THIN_MODE || 'false'
+if (thinMode === 'false') {
+    oracledb.initOracleClient()
+}
 const { queryBindToString } = require('bind-sql-string')
 const { logConsole, errorConsole, sqlLogConsole } = require('@thesuhu/colorconsole')
 const env = process.env.NODE_ENV || 'dev'

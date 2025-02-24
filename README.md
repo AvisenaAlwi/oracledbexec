@@ -13,7 +13,7 @@ npm install oracledbexec --save
 
 ## Variables
 
-This module will read seven environment variables. If it doesn't find the related environment variable it will read the default value. Or you can pass database configuration parameters when initializing the module.
+This module will read eight environment variables. If it doesn't find the related environment variable it will read the default value. Or you can pass database configuration parameters when initializing the module.
 
 * **ORA_USR**: the database user name. (default: `hr`)
 * **ORA_PWD**: the password of the database user. (default: `hr`)
@@ -25,6 +25,7 @@ This module will read seven environment variables. If it doesn't find the relate
 * **POOL_PING_INTERVAL**: check aliveness of connection if idle in the pool in seconds. (default: `60`)
 * **QUEUE_MAX**: the maximum `getConnection()` calls in the pool queue. (default: `500`)
 * **QUEUE_TIMEOUT**: terminate getConnection() calls queued for longer than 60000 milliseconds (default: `60000`)
+* **THIN_MODE**: enable thin mode for the Oracle client. (default: `false`)
 
 ## Usage
 
