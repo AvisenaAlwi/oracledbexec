@@ -25,7 +25,7 @@ This module will read eight environment variables. If it doesn't find the relate
 * **POOL_PING_INTERVAL**: check aliveness of connection if idle in the pool in seconds. (default: `60`)
 * **QUEUE_MAX**: the maximum `getConnection()` calls in the pool queue. (default: `500`)
 * **QUEUE_TIMEOUT**: terminate getConnection() calls queued for longer than 60000 milliseconds (default: `60000`)
-* **THIN_MODE**: enable thin mode for the Oracle client. (default: `false`)
+* **THIN_MODE**: enable thin mode for the Oracle client. (default: `true`)
 
 ## Usage
 
