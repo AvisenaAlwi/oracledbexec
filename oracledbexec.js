@@ -1,5 +1,5 @@
 const oracledb = require('oracledb')
-const thinMode = process.env.THIN_MODE || 'false'
+const thinMode = process.env.THIN_MODE || 'true'
 if (thinMode === 'false') {
     oracledb.initOracleClient()
 }
