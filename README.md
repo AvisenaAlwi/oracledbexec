@@ -17,7 +17,11 @@ This module will read eight environment variables. If it doesn't find the relate
 
 * **ORA_USR**: the database user name. (default: `hr`)
 * **ORA_PWD**: the password of the database user. (default: `hr`)
-* **ORA_CONSTR**: connection string `<host>:<port>/<service name>`. (default: `localhost:1521/XEPDB1`)
+* **ORA_CONSTR**: connection string. If using a DEDICATED connection, the format is `<host>:<port>/<service name>` (default: `localhost:1521/XEPDB1`).  
+
+  If using DRCP (Database Resident Connection Pooling) with the `SERVER=POOLED` option, the format is:  
+  `ORA_CONSTR=(DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(HOST=<host>)(PORT=<port>))(CONNECT_DATA=(SERVER=POOLED)(SERVICE_NAME=<service name>)))`
+  
 * **POOL_MIN**: the number of connections initially created. (default: `10`)
 * **POOL_MAX**: the maximum number of connections. (default: `10`)
 * **POOL_INCREMENT**: the number of connections that are opened whenever a connection request exceeds the number of currently open connections. (default: `0`)
