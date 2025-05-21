@@ -17,11 +17,11 @@ This module will read eight environment variables. If it doesn't find the relate
 
 * **ORA_USR**: the database user name. (default: `hr`)
 * **ORA_PWD**: the password of the database user. (default: `hr`)
-* **ORA_CONSTR**: connection string. If using a DEDICATED connection, the format is `<host>:<port>/<service name>` (default: `localhost:1521/XEPDB1`).  
+* **ORA_CONSTR**: connection string. If using a DEDICATED connection, the format is `<host>:<port>/<service name>` (default: `localhost:1521/XEPDB1`).
 
-  If using DRCP (Database Resident Connection Pooling) with the `SERVER=POOLED` option, the format is:  
+  If using DRCP (Database Resident Connection Pooling) with the `SERVER=POOLED` option, the format is:
   `ORA_CONSTR=(DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(HOST=<host>)(PORT=<port>))(CONNECT_DATA=(SERVER=POOLED)(SERVICE_NAME=<service name>)))`
-  
+
 * **POOL_MIN**: the number of connections initially created. (default: `10`)
 * **POOL_MAX**: the maximum number of connections. (default: `10`)
 * **POOL_INCREMENT**: the number of connections that are opened whenever a connection request exceeds the number of currently open connections. (default: `0`)
@@ -30,6 +30,7 @@ This module will read eight environment variables. If it doesn't find the relate
 * **QUEUE_MAX**: the maximum `getConnection()` calls in the pool queue. (default: `500`)
 * **QUEUE_TIMEOUT**: terminate getConnection() calls queued for longer than 60000 milliseconds (default: `60000`)
 * **THIN_MODE**: enable thin mode for the Oracle client. (default: `true`)
+* **ORACLE_LIB_DIR**: Oracle Instant Client Path, required for Thick Mode
 
 ## Usage
 
@@ -139,6 +140,24 @@ Of course, you can pass the pool alias parameter when create a session.
 let result = await begintrans('hrpool')
 ```
 
+## Read CLOB Columns
+Reading CLOB columns in Oracle Database using Node.js and the oracledb driver can be tedious, since the CLOB data comes as a stream that must be manually consumed and converted to a string. This utility function simplifies that process by automatically handling the CLOB conversion for you.
+```js
+const { oraexecAndReadClob } = require('./your-module');
+
+oraexecAndReadClob(
+  'SELECT ID, CONTENT FROM ARTICLES WHERE ROWNUM = 1',
+  {},                  // Bind parameters
+  ['CONTENT'],         // CLOB column(s) to read
+  'default',
+  { log: true},
+).then(result => {
+  console.log(result.rows); // CONTENT is now a plain string
+}).catch(err => {
+  console.error(err);
+});
+```
+---
 That's all.
 
 If you find this useful, please ⭐ the repository. Any feedback is welcome.

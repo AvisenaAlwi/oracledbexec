@@ -392,7 +392,9 @@ readClobValue = async (clob) => {
  * @param { string } query - SQL Query
  * @param { object | null} params - Binding parameter
  * @param { Array<string> } clobColumnNames - Array of CLOB column names
+ * @param { import('oracledb').ExecuteOptions } options
  * @param { string } poolAlias - Pool alias
+ * @param { { log: boolean } } customOption - Custom option
  * @returns { Promise< import('oracledb').Result > }
  *
  * @example
