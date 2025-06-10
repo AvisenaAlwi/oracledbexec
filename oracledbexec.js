@@ -19,6 +19,38 @@ const sqlLogConsole = (message) => {
         sqlLogConsoleDefault(message);
 }
 
+const getCallerStackInfo = (depthCount = 1) => {
+  const err = new Error();
+  const stackLines = err.stack?.split('\n') || [];
+
+  const entries = [];
+
+  for (let i = 0; i < depthCount; i++) {
+    const rawLine = stackLines[stackDepthStart + i]?.trim();
+    if (!rawLine) continue;
+
+    const match = rawLine.match(/\(?(.+):(\d+):(\d+)\)?$/);
+    if (!match) {
+      entries.push({
+        file: 'unknown',
+        line: 0,
+        column: 0,
+        raw: rawLine
+      });
+    } else {
+      const [, file, line, column] = match;
+      entries.push({
+        file,
+        line: parseInt(line, 10),
+        column: parseInt(column, 10),
+        raw: rawLine
+      });
+    }
+  }
+
+  return entries;
+}
+
 const thinMode = process.env.THIN_MODE || 'true'
 if (thinMode === 'false') {
     const icExists = require('fs').existsSync(process.env.ORACLE_LIB_DIR ?? null)
@@ -84,10 +116,10 @@ exports.close = async function close(poolAlias = null) {
             await pool.close(poolClosingTime)
             logConsole(`Pool closed: ${pool.poolAlias}`)
         }
-        return
+    } else {
+        await (oracledb.getPool(poolAlias))?.close(poolClosingTime)
+        logConsole(`Pool closed: ${poolAlias}`)
     }
-    await (oracledb.getPool(poolAlias))?.close(poolClosingTime)
-    logConsole(`Pool closed: ${poolAlias}`)
 }
 
 /**
@@ -103,6 +135,7 @@ exports.oraexec = function (sql, param = {}, poolAlias, options = {}, customOpti
     const { log = true } = customOption ?? {}
     param                = param || {}
     options              = options || {}
+    const callerStack = new Error().stack;
     return new Promise((resolve, reject) => {
         let pool
         if (poolAlias) {
@@ -112,13 +145,27 @@ exports.oraexec = function (sql, param = {}, poolAlias, options = {}, customOpti
         }
         pool.getConnection((err, connection) => {
             if (err) {
-                reject(err)
+                // Tambahkan info stack pemanggil ke error
+                const enhancedError = new Error(err.message);
+                enhancedError.original = err;
+                enhancedError.stack = callerStack;
+
+                reject(enhancedError);
                 return
             }
 
-            let bindings = queryBindToString(sql, param)
-            if (log && env.includes('dev', 'devel', 'development')) {
-                sqlLogConsole(bindings)
+            try {
+                let bindings = queryBindToString(sql, param)
+                if (log && env.includes('dev', 'devel', 'development')) {
+                    sqlLogConsole(bindings)
+                }
+            } catch (e) {
+                // Tambahkan info stack pemanggil ke error
+                const enhancedError = new Error('Binding error: ' + e.message);
+                enhancedError.original = e;
+                enhancedError.stack = callerStack;
+                reject(enhancedError);
+                return;
             }
 
             connection.execute(sql, param, {
@@ -128,7 +175,12 @@ exports.oraexec = function (sql, param = {}, poolAlias, options = {}, customOpti
             }, function (err, result) {
                 if (err) {
                     connection.close()
-                    reject(err)
+                    // Tambahkan info stack pemanggil ke error
+                    const enhancedError = new Error(err.message);
+                    enhancedError.original = err;
+                    enhancedError.stack = callerStack;
+
+                    reject(enhancedError);
                     return
                 }
                 connection.close()
@@ -148,6 +200,7 @@ exports.oraexec = function (sql, param = {}, poolAlias, options = {}, customOpti
 exports.oraexectrans = function (queries, poolAlias, customOption) {
     const { log = true } = customOption ?? {}
     let paramCount = queries.length - 1
+    const callerStack = new Error().stack;
     return new Promise((resolve, reject) => {
         let pool
         if (poolAlias) {
@@ -158,7 +211,12 @@ exports.oraexectrans = function (queries, poolAlias, customOption) {
         let ressql = []
         pool.getConnection((err, connection) => {
             if (err) {
-                reject(err)
+                // Tambahkan info stack pemanggil ke error
+                const enhancedError = new Error(err.message);
+                enhancedError.original = err;
+                enhancedError.stack = callerStack;
+
+                reject(enhancedError);
                 return
             }
             function running(count) {
@@ -167,15 +225,23 @@ exports.oraexectrans = function (queries, poolAlias, customOption) {
                     let sql   = query.query
                     let param = query.parameters || {}
 
-                    let bindings = queryBindToString(sql, param)
-                    if (log && env.includes('dev', 'devel', 'development')) {
-                        sqlLogConsole(bindings)
+                    try {
+                        let bindings = queryBindToString(sql, param)
+                        if (log && env.includes('dev', 'devel', 'development')) {
+                            sqlLogConsole(bindings)
+                        }
+                    } catch (e) {
+                        // Tambahkan info stack pemanggil ke error
+                        const enhancedError = new Error(e.message);
+                        enhancedError.original = e;
+                        enhancedError.stack = callerStack;
+                        reject(enhancedError);
                     }
 
                     let queryId = count
                     prosesSQL(connection, sql, param, resolve, reject, ressql, queryId, () => {
                         running(count + 1)
-                    }, { log: log})
+                    }, { log: log })
                 } else {
                     completeSQL(connection)
                     resolve(ressql)
@@ -279,10 +345,20 @@ exports.begintrans = function (poolAlias, customOption) {
  */
 exports.exectrans = function (connection, sql, param, customOption) {
     const { log = true } = customOption ?? {}
+    const callerStack = new Error().stack;
     return new Promise((resolve, reject) => {
-        let bindings = queryBindToString(sql, param)
-        if (log && env.includes('dev', 'devel', 'development')) {
-            sqlLogConsole(bindings)
+        try {
+            let bindings = queryBindToString(sql, param)
+            if (log && env.includes('dev', 'devel', 'development')) {
+                sqlLogConsole(bindings)
+            }
+        } catch (e) {
+            // Tambahkan info stack pemanggil ke error
+            const enhancedError = new Error('Binding error: ' + e.message);
+            enhancedError.original = e;
+            enhancedError.stack = callerStack;
+            reject(enhancedError);
+            return;
         }
 
         connection.execute(sql, param, {
@@ -291,16 +367,20 @@ exports.exectrans = function (connection, sql, param, customOption) {
         }, function (err, result) {
             if (err) {
                 connection.rollback()
-                connection.close()
+                    .catch(() => {})
+                    .then(() => connection.close().catch(() => {}))
+                    .finally(() => {
+                        if (env.includes('dev', 'devel', 'development')) {
+                            sqlLogConsole('rollback transaction');
+                        }
+                        // Tambahkan info stack pemanggil ke error
+                        const enhancedError = new Error(err.message);
+                        enhancedError.original = err;
+                        enhancedError.stack = callerStack;
 
-                if (log && env.includes('dev', 'devel', 'development')) {
-                    sqlLogConsole('rollback transction')
-                }
-
-                reject({
-                    message: err.message
-                })
-                return
+                        reject(enhancedError);
+                    });
+                return;
             }
             resolve(result)
         })
