@@ -11,38 +11,49 @@ Running Oracle queries made easier.
 npm install oracledbexec --save
 ```
 
-## Variables
+## Environment Variables
 
-This module will read eight environment variables. If it doesn't find the related environment variable it will read the default value. Or you can pass database configuration parameters when initializing the module.
+This module reads environment variables for configuration. If environment variables are not found, default values will be used. You can also pass database configuration parameters when initializing the module.
 
-* **ORA_USR**: the database user name. (default: `hr`)
-* **ORA_PWD**: the password of the database user. (default: `hr`)
-* **ORA_CONSTR**: connection string. If using a DEDICATED connection, the format is `<host>:<port>/<service name>` (default: `localhost:1521/XEPDB1`).
+### Database Configuration
+* **ORA_USR**: the database user name. (required, no default)
+* **ORA_PWD**: the password of the database user. (required, no default)
+* **ORA_CONSTR**: connection string `<host>:<port>/<service name>`. (required, no default)
 
-  If using DRCP (Database Resident Connection Pooling) with the `SERVER=POOLED` option, the format is:
-  `ORA_CONSTR=(DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(HOST=<host>)(PORT=<port>))(CONNECT_DATA=(SERVER=POOLED)(SERVICE_NAME=<service name>)))`
+### Pool Configuration (Production Optimized)
+* **POOL_MIN**: the minimum number of connections in the pool. (default: `2`)
+* **POOL_MAX**: the maximum number of connections. (default: `8`)
+* **POOL_INCREMENT**: connections opened when more are needed. (default: `1`)
+* **POOL_ALIAS**: pool identifier for multiple pools. (default: `default`)
+* **POOL_PING_INTERVAL**: connection health check interval in seconds. (default: `30`)
+* **POOL_TIMEOUT**: idle connection timeout in seconds. (default: `120`)
+* **POOL_CLOSING_TIME**: graceful pool shutdown wait time in seconds. (default: `0`)
 
-* **POOL_MIN**: the number of connections initially created. (default: `10`)
-* **POOL_MAX**: the maximum number of connections. (default: `10`)
-* **POOL_INCREMENT**: the number of connections that are opened whenever a connection request exceeds the number of currently open connections. (default: `0`)
-* **POOL_ALIAS**: is used to explicitly add pools to the connection pool cache. (default: `default`)
-* **POOL_PING_INTERVAL**: check aliveness of connection if idle in the pool in seconds. (default: `60`)
-* **QUEUE_MAX**: the maximum `getConnection()` calls in the pool queue. (default: `500`)
-* **QUEUE_TIMEOUT**: terminate getConnection() calls queued for longer than 60000 milliseconds (default: `60000`)
-* **THIN_MODE**: enable thin mode for the Oracle client. (default: `true`)
-* **ORACLE_LIB_DIR**: Oracle Instant Client Path, required for Thick Mode
+### Queue Configuration
+* **QUEUE_MAX**: maximum queued connection requests. (default: `50`)
+* **QUEUE_TIMEOUT**: queue wait timeout in milliseconds. (default: `5000`)
+
+### Client Configuration
+* **THIN_MODE**: enable Oracle thin client mode. (default: `true`)
+
+### Built-in Monitoring (New Feature)
+* **ORACLE_POOL_MONITORING**: enable automatic pool monitoring. (default: `false`)
+* **ORACLE_MONITOR_INTERVAL**: monitoring check interval in milliseconds. (default: `30000`)
 
 ## Usage
 
-Initialize database in `index.js/app.js` file, to create connection pool and cache it.
+### Basic Setup
+
+Initialize database in `index.js/app.js` file to create connection pool:
 
 ```js
 const oracledbexec = require('oracledbexec')
 
-oracledbexec.initialize()
+// Initialize with environment variables
+await oracledbexec.initialize()
 ```
 
-Or pass database configuration parameters.
+Or pass custom database configuration:
 
 ```js
 const oracledbexec = require('oracledbexec')
@@ -51,21 +62,54 @@ let dbconfig = {
     user: 'hr',
     password: 'hr',
     connectString: 'localhost:1521/XEPDB1',
-    poolMin: 10,
-    poolMax: 10,
-    poolIncrement: 0,
+    poolMin: 2,        // Production optimized
+    poolMax: 8,        // Production optimized
+    poolIncrement: 1,  // Allow gradual scaling
     poolAlias: 'default',
-    poolPingInterval: 60,
-    queueMax: 500,
-    queueTimeout: 60000,
+    poolPingInterval: 30,
+    poolTimeout: 120,
+    queueMax: 50,
+    queueTimeout: 5000,
 }
-oracledbexec.initialize(dbconfig)
+await oracledbexec.initialize(dbconfig)
 ```
 
-Once initialized, you can use the main function of this module. The following is an example of executing a query statement:
+### Built-in Pool Monitoring (New Feature)
+
+Enable automatic pool monitoring by setting environment variable:
+```bash
+ORACLE_POOL_MONITORING=true
+ORACLE_MONITOR_INTERVAL=30000  # Check every 30 seconds
+```
+
+Get pool statistics programmatically:
+```js
+const { getPoolStats } = require('oracledbexec')
+
+// Get current pool status
+const stats = getPoolStats()
+console.log(stats)
+/*
+Output:
+{
+  totalConnections: 3,
+  busyConnections: 1,
+  freeConnections: 2,
+  queuedRequests: 0,
+  lastCheck: '2025-08-13T10:30:00.000Z',
+  poolStatus: 'healthy', // 'healthy', 'warning', 'exhausted'
+  warnings: 0,
+  errors: []
+}
+*/
+```
+
+### Single Query Execution
+
+Execute single SQL statements with automatic connection management:
 
 ```js
-const { oraexec, oraexectrans } = require('oracledbexec')
+const { oraexec } = require('oracledbexec')
 
 try {
     let sql = `SELECT * FROM countries WHERE country_id = :country_id`
@@ -77,87 +121,200 @@ try {
 }
 ```
 
-If you want to call a specific pool, you can pass the pool alias parameter behind.
-
+Use specific pool:
 ```js
 let result = await oraexec(sql, param, 'hrpool')
 ```
 
-For many sql statements, use the transaction function `oraexectrans`, so that if one sql statement fails, it will rollback.
+### Transaction Execution
+
+For multiple SQL statements with automatic rollback on failure:
 
 ```js
-const { oraexec, oraexectrans } = require('oracledbexec')
+const { oraexectrans } = require('oracledbexec')
 
 try {
     let queries = []
-    queries.push({query: `INSERT INTO countries VALUES (:country_id, :country_name)`, parameters: {country_id: 'ID', country_name: 'Indonesia'}})
-    queries.push({query: `INSERT INTO countries VALUES (:country_id, :country_name)`, parameters: {country_id: 'JP', country_name: 'Japan'}})
-    queries.push({query: `INSERT INTO countries VALUES (:country_id, :country_name)`, parameters: {country_id: 'CN', country_name: 'China'}})
+    queries.push({
+        query: `INSERT INTO countries VALUES (:country_id, :country_name)`,
+        parameters: {country_id: 'ID', country_name: 'Indonesia'}
+    })
+    queries.push({
+        query: `INSERT INTO countries VALUES (:country_id, :country_name)`,
+        parameters: {country_id: 'JP', country_name: 'Japan'}
+    })
+    queries.push({
+        query: `INSERT INTO countries VALUES (:country_id, :country_name)`,
+        parameters: {country_id: 'CN', country_name: 'China'}
+    })
+
     await oraexectrans(queries)
+    console.log('All queries executed successfully')
 } catch (err) {
-    console.log(err.message)
+    console.log('Transaction failed, all changes rolled back:', err.message)
 }
 ```
 
-Same as `oraexec`, you can pass the pool alias parameter behind.
-
+Use specific pool:
 ```js
-let result = await oraexectrans(queries, 'hrpool')
+await oraexectrans(queries, 'hrpool')
 ```
 
-In the above explanation, all sessions are created automatically. we simply call the method for query execution. If you want to handle separate sessions, follow these instructions.
+### Manual Transaction Control
 
-If you to handle handle transactions that require a pause to retrieve variables from other tables. So, we have to manually create a new session for execution of transaction queries.
+For complex transactions requiring intermediate processing:
 
-**Be careful**, if you use this method, don't forget to close the session under any circumstances or an orphan session occurs.
-
-The sequence is to create a session, execute the query, and commit the session. here's an example:
+**⚠️ Important**: Always close sessions to prevent connection leaks!
 
 ```js
 const { begintrans, exectrans, committrans, rollbacktrans } = require('oracledbexec')
 
+let session
 try {
-    let session = begintrans()
+    // Start transaction session
+    session = await begintrans()
 
-    let sql = `SELECT country_name FROM countries WHERE country_id=:country_id`
+    // Execute first query
+    let sql = `SELECT country_name FROM countries WHERE country_id = :country_id`
     let param = {country_id: 'ID'}
     let result = await exectrans(session, sql, param)
 
+    // Process result and execute second query
     sql = `INSERT INTO sometable VALUES (:name, :country_name)`
-    param = {name: 'Some Name', country_name: results.rows[0].country_name}
+    param = {
+        name: 'Some Name',
+        country_name: result.rows[0].country_name
+    }
     await exectrans(session, sql, param)
 
+    // Commit transaction
     await committrans(session)
+    console.log('Transaction committed successfully')
+
 } catch (err) {
-    await rollbacktrans(session)
-    console.log(err.message)
+    // Rollback on error
+    if (session) {
+        await rollbacktrans(session)
+    }
+    console.log('Transaction rolled back:', err.message)
 }
 ```
 
-Of course, you can pass the pool alias parameter when create a session.
-
+Use specific pool for transaction:
 ```js
-let result = await begintrans('hrpool')
+let session = await begintrans('hrpool')
 ```
 
-## Read CLOB Columns
-Reading CLOB columns in Oracle Database using Node.js and the oracledb driver can be tedious, since the CLOB data comes as a stream that must be manually consumed and converted to a string. This utility function simplifies that process by automatically handling the CLOB conversion for you.
-```js
-const { oraexecAndReadClob } = require('./your-module');
+### Graceful Shutdown
 
-oraexecAndReadClob(
-  'SELECT ID, CONTENT FROM ARTICLES WHERE ROWNUM = 1',
-  {},                  // Bind parameters
-  ['CONTENT'],         // CLOB column(s) to read
-  'default',
-  { log: true},
-).then(result => {
-  console.log(result.rows); // CONTENT is now a plain string
-}).catch(err => {
-  console.error(err);
-});
+Properly close connection pools when your application shuts down:
+
+```js
+const { close } = require('oracledbexec')
+
+// Graceful shutdown
+process.on('SIGINT', async () => {
+    console.log('Shutting down gracefully...')
+    try {
+        await close()
+        console.log('Database pool closed')
+        process.exit(0)
+    } catch (err) {
+        console.error('Error closing pool:', err.message)
+        process.exit(1)
+    }
+})
 ```
----
+
+## Production Best Practices
+
+### Recommended Environment Configuration
+
+```bash
+# Database connection
+ORA_USR=your_username
+ORA_PWD=your_password
+ORA_CONSTR=host:port/service_name
+
+# Production-optimized pool settings
+POOL_MIN=2
+POOL_MAX=8
+POOL_INCREMENT=1
+POOL_PING_INTERVAL=30
+POOL_TIMEOUT=120
+
+# Queue settings
+QUEUE_MAX=50
+QUEUE_TIMEOUT=5000
+
+# Enable monitoring
+ORACLE_POOL_MONITORING=true
+ORACLE_MONITOR_INTERVAL=30000
+
+# Use thin client
+THIN_MODE=true
+```
+
+### Error Handling
+
+All functions throw errors that should be caught:
+
+```js
+const { oraexec } = require('oracledbexec')
+
+try {
+    const result = await oraexec('SELECT * FROM invalid_table')
+} catch (error) {
+    console.error('Database error:', error.message)
+    // Handle error appropriately
+}
+```
+
+### Connection Leak Prevention
+
+The library automatically manages connections and prevents leaks:
+- All connections are properly closed in `finally` blocks
+- Failed connections are automatically cleaned up
+- Pool monitoring alerts when connections are exhausted
+
+## API Reference
+
+### Functions
+
+| Function | Description | Parameters | Returns |
+|----------|-------------|------------|---------|
+| `initialize(config?)` | Initialize connection pool | Optional config object | Promise<void> |
+| `close()` | Close connection pool | None | Promise<void> |
+| `oraexec(sql, params?, poolAlias?)` | Execute single query | SQL string, parameters, pool alias | Promise<result> |
+| `oraexectrans(queries, poolAlias?)` | Execute transaction | Array of queries, pool alias | Promise<results[]> |
+| `begintrans(poolAlias?)` | Start manual transaction | Pool alias | Promise<connection> |
+| `exectrans(connection, sql, params?)` | Execute in transaction | Connection, SQL, parameters | Promise<result> |
+| `committrans(connection)` | Commit transaction | Connection | Promise<void> |
+| `rollbacktrans(connection)` | Rollback transaction | Connection | Promise<void> |
+| `getPoolStats()` | Get pool statistics | None | Object |
+
+### Built-in Monitoring
+
+When `ORACLE_POOL_MONITORING=true`:
+- Automatic health checks every 30 seconds (configurable)
+- Warnings when pool usage > 80%
+- Alerts when pool is exhausted
+- Connection statistics tracking
+- Error logging and history
+
+## Changelog
+
+### Version 1.8.1+ (Latest Improvements)
+- ✅ **Production-optimized defaults**: Conservative pool sizing (2-8 connections)
+- ✅ **Built-in monitoring**: Optional automatic pool health monitoring
+- ✅ **Enhanced error handling**: Guaranteed connection cleanup
+- ✅ **Connection leak prevention**: Try-finally blocks ensure proper cleanup
+- ✅ **Improved transaction management**: Better rollback and commit handling
+- ✅ **Pool statistics API**: `getPoolStats()` function for monitoring
+- ✅ **Configurable timeouts**: Reduced queue timeout to prevent hanging
+- ✅ **Input validation**: Enhanced parameter validation
+- ✅ **Graceful shutdown**: Proper pool closing with configurable wait time
+
 That's all.
 
 If you find this useful, please ⭐ the repository. Any feedback is welcome.

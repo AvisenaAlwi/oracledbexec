@@ -1,544 +1,371 @@
-const oracledb              = require('oracledb')
-const { queryBindToString } = require('bind-sql-string')
-const {
-    logConsole: logConsoleDefault,
-    errorConsole,
-    sqlLogConsole: sqlLogConsoleDefault
-} = require('@thesuhu/colorconsole');
-const { resolve } = require('path');
-
-const pools = new Map();
-let logEnable = true;
-
-const logConsole = (message) => {
-    if (logEnable)
-        logConsoleDefault(message);
-}
-const sqlLogConsole = (message) => {
-    if (logEnable)
-        sqlLogConsoleDefault(message);
-}
-
-const getCallerStackInfo = (depthCount = 1) => {
-  const err = new Error();
-  const stackLines = err.stack?.split('\n') || [];
-
-  const entries = [];
-
-  for (let i = 0; i < depthCount; i++) {
-    const rawLine = stackLines[stackDepthStart + i]?.trim();
-    if (!rawLine) continue;
-
-    const match = rawLine.match(/\(?(.+):(\d+):(\d+)\)?$/);
-    if (!match) {
-      entries.push({
-        file: 'unknown',
-        line: 0,
-        column: 0,
-        raw: rawLine
-      });
-    } else {
-      const [, file, line, column] = match;
-      entries.push({
-        file,
-        line: parseInt(line, 10),
-        column: parseInt(column, 10),
-        raw: rawLine
-      });
-    }
-  }
-
-  return entries;
-}
-
+const oracledb = require('oracledb')
 const thinMode = process.env.THIN_MODE || 'true'
 if (thinMode === 'false') {
-    const icExists = require('fs').existsSync(process.env.ORACLE_LIB_DIR ?? null)
-    if (!icExists)
-        throw new Error('When using thick mode, the ORACLE_LIB_DIR environment variable must point to the Instant Client path.')
-    oracledb.initOracleClient({ libDir: process.env.ORACLE_LIB_DIR });
+    oracledb.initOracleClient()
 }
-const env             = process.env.NODE_ENV || 'dev'
-const poolClosingTime = process.env.POOL_CLOSING_TIME || 0  // 0 = force close, use 10 (seconds) to avoid force close
+const { queryBindToString } = require('bind-sql-string')
+const { logConsole, errorConsole, sqlLogConsole } = require('@thesuhu/colorconsole')
+const env = process.env.NODE_ENV || 'dev'
+const poolClosingTime = process.env.POOL_CLOSING_TIME || 0 // 0 = force close, use 10 (seconds) to avoid force close
 
+// Built-in monitoring configuration
+const enableMonitoring = process.env.ORACLE_POOL_MONITORING === 'true' || false
+const monitoringInterval = parseInt(process.env.ORACLE_MONITOR_INTERVAL, 10) || 30000 // 30 seconds
+let poolMonitor = null
+
+// Remove default credentials for security
 const dbconfig = {
-    user            : process.env.ORA_USR || 'hr',
-    password        : process.env.ORA_PWD || 'hr',
-    connectString   : process.env.ORA_CONSTR || 'localhost:1521/XEPDB1',
-    poolMin         : parseInt(process.env.POOL_MIN, 10) || 10,             // minimum pool size
-    poolMax         : parseInt(process.env.POOL_MAX, 10) || 10,             // maximum pool size
-    poolIncrement   : parseInt(process.env.POOL_INCREMENT, 10) || 0,        // 0 = pool is not incremental
-    poolAlias       : process.env.POOL_ALIAS || 'default',                  // optional pool alias
-    poolPingInterval: parseInt(process.env.POOL_PING_INTERVAL, 10) || 60,   // check aliveness of connection if idle in the pool for 60 seconds
-    queueMax        : parseInt(process.env.QUEUE_MAX, 10) || 500,           // don't allow more than 500 unsatisfied getConnection() calls in the pool queue
-    queueTimeout    : parseInt(process.env.QUEUE_TIMEOUT, 10) || 60000,     // terminate getConnection() calls queued for longer than 60000 milliseconds
-
+    user: process.env.ORA_USR,
+    password: process.env.ORA_PWD,
+    connectString: process.env.ORA_CONSTR,
+    poolMin: parseInt(process.env.POOL_MIN, 10) || 2, // Conservative default
+    poolMax: parseInt(process.env.POOL_MAX, 10) || 8, // Conservative default
+    poolIncrement: parseInt(process.env.POOL_INCREMENT, 10) || 1, // Allow growth
+    poolAlias: process.env.POOL_ALIAS || 'default', // optional pool alias
+    poolPingInterval: parseInt(process.env.POOL_PING_INTERVAL, 10) || 30, // Ping every 30 seconds
+    poolTimeout: parseInt(process.env.POOL_TIMEOUT, 10) || 120, // Timeout after 2 minutes
+    queueMax: parseInt(process.env.QUEUE_MAX, 10) || 50, // Smaller queue to prevent overload
+    queueTimeout: parseInt(process.env.QUEUE_TIMEOUT, 10) || 5000, // 5 second timeout for queue
 }
 
-const defaultThreadPoolSize = 4                                         // default thread pool size
-process.env.UV_THREADPOOL_SIZE = dbconfig.poolMax + defaultThreadPoolSize  // Increase thread pool size by poolMax
+const defaultThreadPoolSize = 4 // default thread pool size
+process.env.UV_THREADPOOL_SIZE = dbconfig.poolMax + defaultThreadPoolSize // Increase thread pool size by poolMax
 
-exports.enableLogConsole = (boolean) => {
-    logEnable = boolean == 'true' || boolean === true || boolean === 1 || boolean === '1'
+// Built-in Pool Monitor Class
+class BuiltInPoolMonitor {
+    constructor(poolAlias, intervalMs = 30000) {
+        this.poolAlias = poolAlias
+        this.intervalMs = intervalMs
+        this.monitorInterval = null
+        this.stats = {
+            totalConnections: 0,
+            busyConnections: 0,
+            freeConnections: 0,
+            lastCheck: null,
+            poolStatus: 'unknown',
+            warnings: 0,
+            errors: []
+        }
+    }
+
+    start() {
+        if (enableMonitoring) {
+            logConsole(`🔍 Pool monitoring enabled for: ${this.poolAlias}`)
+            this.monitorInterval = setInterval(() => {
+                this.checkPoolHealth()
+            }, this.intervalMs)
+        }
+    }
+
+    stop() {
+        if (this.monitorInterval) {
+            clearInterval(this.monitorInterval)
+            this.monitorInterval = null
+            logConsole('Pool monitoring stopped')
+        }
+    }
+
+    checkPoolHealth() {
+        try {
+            const pool = oracledb.getPool(this.poolAlias)
+
+            this.stats = {
+                totalConnections: pool.connectionsInUse + pool.connectionsOpen,
+                busyConnections: pool.connectionsInUse,
+                freeConnections: pool.connectionsOpen,
+                queuedRequests: pool.queueLength || 0,
+                lastCheck: new Date().toISOString(),
+                poolStatus: 'healthy'
+            }
+
+            // Warning thresholds
+            const usagePercent = (this.stats.busyConnections / Math.max(this.stats.totalConnections, 1)) * 100
+
+            if (usagePercent > 80) {
+                this.stats.poolStatus = 'warning'
+                this.stats.warnings++
+
+                // Log warning every 5 minutes to avoid spam
+                if (this.stats.warnings % 10 === 1) {
+                    logConsole(`⚠️  Pool usage high: ${usagePercent.toFixed(1)}% (${this.stats.busyConnections}/${this.stats.totalConnections})`)
+                }
+            }
+
+            if (this.stats.busyConnections >= this.stats.totalConnections && this.stats.totalConnections > 0) {
+                this.stats.poolStatus = 'exhausted'
+                errorConsole('🚨 Pool exhausted! All connections in use.')
+            }
+
+        } catch (error) {
+            this.stats.errors.push({
+                timestamp: new Date().toISOString(),
+                error: error.message
+            })
+            // Keep only last 10 errors
+            if (this.stats.errors.length > 10) {
+                this.stats.errors = this.stats.errors.slice(-10)
+            }
+        }
+    }
+
+    getStats() {
+        return this.stats
+    }
 }
 
-/**
- * Create new pool
- * @param { import('oracledb').PoolAttributes } customConfig - Pool Attributes
- */
+// create pool with validation
 exports.initialize = async function initialize(customConfig) {
     try {
-        logConsole('Attempting to create pool: ' + (customConfig ? customConfig.poolAlias : dbconfig.poolAlias));
-        let pool = null
-        if (customConfig) {
-            pool = await oracledb.createPool(customConfig);
-            logConsole('Pool created: ' + customConfig.poolAlias);
-        } else {
-            pool = await oracledb.createPool(dbconfig);
-            logConsole('Pool created: ' + dbconfig.poolAlias);
+        const config = customConfig || dbconfig
+
+        // Validate required config
+        if (!config.user || !config.password || !config.connectString) {
+            throw new Error('Missing required database configuration: user, password, or connectString')
         }
-        if ((customConfig || dbconfig).poolAlias)
-            pools.set((customConfig || dbconfig).poolAlias, pool)
+
+        logConsole('Attempting to create pool: ' + config.poolAlias);
+        await oracledb.createPool(config);
+        logConsole('Pool created: ' + config.poolAlias);
+
+        // Start built-in monitoring if enabled
+        if (enableMonitoring) {
+            poolMonitor = new BuiltInPoolMonitor(config.poolAlias, monitoringInterval)
+            poolMonitor.start()
+        }
+
     } catch (err) {
         errorConsole('Error creating pool: ' + err.message);
         throw new Error(err.message);
     }
 };
 
-/**
- * Close Pool
- * @param { string } poolAlias - DB Pool Alias
- * @returns { Promise }
- */
-exports.close = async function close(poolAlias = null) {
-    if (poolAlias === null) {
-        for ( const pool of Array.from(pools.values()) ) {
-            await pool.close(poolClosingTime)
-            logConsole(`Pool closed: ${pool.poolAlias}`)
-        }
-    } else {
-        await (oracledb.getPool(poolAlias))?.close(poolClosingTime)
-        logConsole(`Pool closed: ${poolAlias}`)
+// close pool
+exports.close = async function close() {
+    // Stop monitoring before closing
+    if (poolMonitor) {
+        poolMonitor.stop()
+        poolMonitor = null
+    }
+    await oracledb.getPool().close(poolClosingTime)
+}
+
+// Get pool statistics (NEW FEATURE)
+exports.getPoolStats = function() {
+    if (poolMonitor) {
+        return poolMonitor.getStats()
+    }
+    return {
+        monitoring: false,
+        message: 'Pool monitoring is disabled. Set ORACLE_POOL_MONITORING=true to enable.'
     }
 }
 
-/**
- * Run SQL query
- * @param { string } sql - SQL Query
- * @param { object | null } param - Object of query binding
- * @param { string } poolAlias - Pool alias
- * @param { import('oracledb').ExecuteOptions } options
- * @param { { log: boolean } } customOption - Custom option
- * @returns { Promise<import('oracledb').Result> } - OracleDb Result
- */
-exports.oraexec = function (sql, param = {}, poolAlias, options = {}, customOption) {
-    const { log = true } = customOption ?? {}
-    param                = param || {}
-    options              = options || {}
-    const callerStack = new Error().stack;
-    return new Promise((resolve, reject) => {
-        let pool
-        if (poolAlias) {
-            pool = oracledb.getPool(poolAlias)
-        } else {
-            pool = oracledb.getPool('default')
+// single query - IMPROVED with proper connection management
+exports.oraexec = async function(sql, param = {}, poolAlias = 'default') {
+    // Input validation
+    if (!sql || typeof sql !== 'string') {
+        throw new Error('SQL query is required and must be a string')
+    }
+
+    const pool = oracledb.getPool(poolAlias)
+    let connection
+
+    try {
+        connection = await pool.getConnection()
+
+        // Log SQL in development
+        if (['dev', 'devel', 'development'].includes(env)) {
+            const bindings = queryBindToString(sql, param)
+            sqlLogConsole(bindings)
         }
-        pool.getConnection((err, connection) => {
-            if (err) {
-                // Tambahkan info stack pemanggil ke error
-                const enhancedError = new Error(err.message);
-                enhancedError.original = err;
-                enhancedError.stack = callerStack;
 
-                reject(enhancedError);
-                return
-            }
+        const result = await connection.execute(sql, param, {
+            outFormat: oracledb.OBJECT,
+            autoCommit: true
+        })
 
+        return result
+    } catch (error) {
+        // Enhanced error logging
+        errorConsole('Oracle execution error: ' + error.message)
+        throw error
+    } finally {
+        // GUARANTEED connection cleanup
+        if (connection) {
             try {
-                let bindings = queryBindToString(sql, param)
-                if (log && env.includes('dev', 'devel', 'development')) {
-                    sqlLogConsole(bindings)
-                }
-            } catch (e) {
-                // Tambahkan info stack pemanggil ke error
-                const enhancedError = new Error('Binding error: ' + e.message);
-                enhancedError.original = e;
-                enhancedError.stack = callerStack;
-                reject(enhancedError);
-                return;
+                await connection.close()
+            } catch (closeError) {
+                errorConsole('Error closing connection: ' + closeError.message)
+            }
+        }
+    }
+}
+
+// multi query - IMPROVED with proper transaction management
+exports.oraexectrans = async function(queries, poolAlias = 'default') {
+    // Input validation
+    if (!Array.isArray(queries) || queries.length === 0) {
+        throw new Error('Queries must be a non-empty array')
+    }
+
+    const pool = oracledb.getPool(poolAlias)
+    let connection
+
+    try {
+        connection = await pool.getConnection()
+        const results = []
+
+        // Process each query in the transaction
+        for (let i = 0; i < queries.length; i++) {
+            const query = queries[i]
+
+            if (!query.query || typeof query.query !== 'string') {
+                throw new Error(`Query at index ${i} is invalid`)
             }
 
-            connection.execute(sql, param, {
+            const sql = query.query
+            const param = query.parameters || {}
+
+            // Log SQL in development
+            if (['dev', 'devel', 'development'].includes(env)) {
+                const bindings = queryBindToString(sql, param)
+                sqlLogConsole(bindings)
+            }
+
+            const result = await connection.execute(sql, param, {
                 outFormat: oracledb.OBJECT,
-                autoCommit: true,
-                ...options
-            }, function (err, result) {
-                if (err) {
-                    connection.close()
-                    // Tambahkan info stack pemanggil ke error
-                    const enhancedError = new Error(err.message);
-                    enhancedError.original = err;
-                    enhancedError.stack = callerStack;
-
-                    reject(enhancedError);
-                    return
-                }
-                connection.close()
-                resolve(result)
+                autoCommit: false
             })
-        })
-    })
-}
 
-/**
- * Run multiple query at once within transaction
- * @param { Array<{ query: string, parameters: object }> } queries - Array of SQL query
- * @param { string } poolAlias - Pool alias
- * @param { { log: boolean } } customOption - Custom option
- * @returns { Promise< import('oracledb').Result > } - OracleDB Result
- */
-exports.oraexectrans = function (queries, poolAlias, customOption) {
-    const { log = true } = customOption ?? {}
-    let paramCount = queries.length - 1
-    const callerStack = new Error().stack;
-    return new Promise((resolve, reject) => {
-        let pool
-        if (poolAlias) {
-            pool = oracledb.getPool(poolAlias)
-        } else {
-            pool = oracledb.getPool('default')
-        }
-        let ressql = []
-        pool.getConnection((err, connection) => {
-            if (err) {
-                // Tambahkan info stack pemanggil ke error
-                const enhancedError = new Error(err.message);
-                enhancedError.original = err;
-                enhancedError.stack = callerStack;
-
-                reject(enhancedError);
-                return
-            }
-            function running(count) {
-                if (count <= paramCount && count > -1) {
-                    let query = queries[count]
-                    let sql   = query.query
-                    let param = query.parameters || {}
-
-                    try {
-                        let bindings = queryBindToString(sql, param)
-                        if (log && env.includes('dev', 'devel', 'development')) {
-                            sqlLogConsole(bindings)
-                        }
-                    } catch (e) {
-                        // Tambahkan info stack pemanggil ke error
-                        const enhancedError = new Error(e.message);
-                        enhancedError.original = e;
-                        enhancedError.stack = callerStack;
-                        reject(enhancedError);
-                    }
-
-                    let queryId = count
-                    prosesSQL(connection, sql, param, resolve, reject, ressql, queryId, () => {
-                        running(count + 1)
-                    }, { log: log })
-                } else {
-                    completeSQL(connection)
-                    resolve(ressql)
-                }
-            }
-            running(0)
-        })
-    })
-}
-
-/**
- * Process SQL Query
- * @param { import('oracledb').Connection } connection - DB Connection
- * @param { string } sql - SQL Query
- * @param { object | null } param - Object
- * @param { (object) => void } resolve - Resolve
- * @param { (object) => void } reject - Reject
- * @param { Array< { queryid: number, results: Array< import('oracledb').Result >} > } ressql
- * @param { number } queryId - Query Id
- * @param { () => void } callback - Callback
- * @param { { log: boolean } } customOption - Custom option
- */
-function prosesSQL(connection, sql, param, resolve, reject, ressql, queryId, callback, customOption) {
-    const { log = true } = customOption ?? {}
-    param = param || {}
-    connection.execute(sql, param, {
-        outFormat: oracledb.OBJECT,
-        autoCommit: false
-    }, (err, result) => {
-        if (err) {
-            connection.rollback()
-            connection.close()
-            if (log)
-                sqlLogConsole('rollback')
-            reject({
-                message: err.message
+            results.push({
+                queryid: i,
+                results: result
             })
-            return
         }
-        ressql[queryId] = {
-            queryid: queryId,
-            results: result
+
+        // Commit all queries
+        await connection.commit()
+        if (['dev', 'devel', 'development'].includes(env)) {
+            sqlLogConsole('Transaction committed')
         }
-        callback()
-    })
+
+        return results
+
+    } catch (error) {
+        // Rollback on error
+        if (connection) {
+            try {
+                await connection.rollback()
+                if (['dev', 'devel', 'development'].includes(env)) {
+                    sqlLogConsole('Transaction rolled back due to error')
+                }
+            } catch (rollbackError) {
+                errorConsole('Rollback error: ' + rollbackError.message)
+            }
+        }
+        throw error
+    } finally {
+        // GUARANTEED connection cleanup
+        if (connection) {
+            try {
+                await connection.close()
+            } catch (closeError) {
+                errorConsole('Error closing connection: ' + closeError.message)
+            }
+        }
+    }
 }
 
-/**
- * Commits the current transaction on the provided Oracle database connection,
- * logs the commit action, and then closes the connection.
- *
- * @param { import('oracledb').Connection } connection - The Oracle database connection object.
- * @param { { log: boolean } } customOption - Custom option
- */
-function completeSQL(connection, customOption) {
-    const { log = true } = customOption ?? {}
-    if (log)
-        sqlLogConsole('commit')
-    connection?.commit()
-    connection?.close()
-}
+// Manual transaction - IMPROVED with proper session management
+exports.begintrans = async function(poolAlias = 'default') {
+    const pool = oracledb.getPool(poolAlias)
 
-/**
- * Begin transaction
- * @param { string } poolAlias - Pool Alias
- * @param { { log: boolean } } customOption - Custom option
- * @returns { Promise< import('oracledb').Connection > } - Connection Open
- */
-exports.begintrans = function (poolAlias, customOption) {
-    const { log = true } = customOption ?? {}
-    return new Promise((resolve, reject) => {
-        let pool
-        if (poolAlias) {
-            pool = oracledb.getPool(poolAlias)
-        } else {
-            pool = oracledb.getPool('default')
-        }
-        pool.getConnection((err, connection) => {
-            if (err) {
-                reject(err)
-                return
-            }
+    try {
+        const connection = await pool.getConnection()
 
-            let bindings = 'begin transaction'
-            if (log && env.includes('dev', 'devel', 'development')) {
-                sqlLogConsole(bindings)
-            }
-            resolve(connection);
-        })
-
-    })
-}
-
-/**
- * Execute SQL within DB transaction
- * @param { import('oracledb').Connection } connection - OracleDB Connection
- * @param { string } sql - SQL Query
- * @param { object } param - Bind Parameter
- * @param {{ log: boolean }} customOption - Custom option
- * @returns { Promise< import('oracledb').Result > } - Promise of result
- */
-exports.exectrans = function (connection, sql, param, customOption) {
-    const { log = true } = customOption ?? {}
-    const callerStack = new Error().stack;
-    return new Promise((resolve, reject) => {
-        try {
-            let bindings = queryBindToString(sql, param)
-            if (log && env.includes('dev', 'devel', 'development')) {
-                sqlLogConsole(bindings)
-            }
-        } catch (e) {
-            // Tambahkan info stack pemanggil ke error
-            const enhancedError = new Error('Binding error: ' + e.message);
-            enhancedError.original = e;
-            enhancedError.stack = callerStack;
-            reject(enhancedError);
-            return;
+        if (['dev', 'devel', 'development'].includes(env)) {
+            sqlLogConsole('Transaction session started')
         }
 
-        connection.execute(sql, param, {
+        return connection
+    } catch (error) {
+        errorConsole('Error starting transaction: ' + error.message)
+        throw error
+    }
+}
+
+// Execute with manual session - IMPROVED
+exports.exectrans = async function(connection, sql, param = {}) {
+    // Input validation
+    if (!connection) {
+        throw new Error('Connection is required')
+    }
+    if (!sql || typeof sql !== 'string') {
+        throw new Error('SQL query is required and must be a string')
+    }
+
+    try {
+        if (['dev', 'devel', 'development'].includes(env)) {
+            const bindings = queryBindToString(sql, param)
+            sqlLogConsole(bindings)
+        }
+
+        const result = await connection.execute(sql, param, {
             outFormat: oracledb.OBJECT,
             autoCommit: false
-        }, function (err, result) {
-            if (err) {
-                connection.rollback()
-                    .catch(() => {})
-                    .then(() => connection.close().catch(() => {}))
-                    .finally(() => {
-                        if (env.includes('dev', 'devel', 'development')) {
-                            sqlLogConsole('rollback transaction');
-                        }
-                        // Tambahkan info stack pemanggil ke error
-                        const enhancedError = new Error(err.message);
-                        enhancedError.original = err;
-                        enhancedError.stack = callerStack;
-
-                        reject(enhancedError);
-                    });
-                return;
-            }
-            resolve(result)
         })
-    })
+
+        return result
+    } catch (error) {
+        errorConsole('Transaction execution error: ' + error.message)
+        throw error
+    }
 }
 
-/**
- * Commit transaction
- * @param { import('oracledb').Connection } connection - OracleDB Open Connection
- * @returns { Promise } - Promise of result
- */
-exports.committrans = function (connection, customOption) {
-    const { log = true } = customOption ?? {}
-    return new Promise((resolve) => {
-        connection.commit()
-        let bindings = 'commit transaction'
+// Commit transaction - IMPROVED
+exports.committrans = async function(connection) {
+    if (!connection) {
+        throw new Error('Connection is required')
+    }
 
-        if (log && env.includes('dev', 'devel', 'development')) {
-            sqlLogConsole(bindings)
+    try {
+        await connection.commit()
+
+        if (['dev', 'devel', 'development'].includes(env)) {
+            sqlLogConsole('Transaction committed')
         }
-        connection.close()
-        resolve()
-    })
-}
-
-/**
- * Rollback Transaction
- * @param { import('oracledb').Connection } connection - OracleDB Open Connection
- * @returns { Promise } - Promise of result
- */
-exports.rollbacktrans = function (connection, customOption) {
-    const { log = true } = customOption ?? {}
-    return new Promise((resolve) => {
-        connection.rollback()
-        let bindings = 'rollback transaction'
-
-        if (log && env.includes('dev', 'devel', 'development')) {
-            sqlLogConsole(bindings)
+    } catch (error) {
+        errorConsole('Commit error: ' + error.message)
+        throw error
+    } finally {
+        try {
+            await connection.close()
+        } catch (closeError) {
+            errorConsole('Error closing connection after commit: ' + closeError.message)
         }
-        connection.close()
-        resolve()
-    })
+    }
 }
 
+// Rollback transaction - IMPROVED
+exports.rollbacktrans = async function(connection) {
+    if (!connection) {
+        throw new Error('Connection is required')
+    }
 
-/**
- *
- * @param { string } poolAlias - DB Pool Alias
- * @returns { import('oracledb').Statistics } - Statistics
- */
-exports.getPoolStatistic = (poolAlias = 'default') => {
-    return oracledb.getPool(poolAlias).getStatistics()
+    try {
+        await connection.rollback()
+
+        if (['dev', 'devel', 'development'].includes(env)) {
+            sqlLogConsole('Transaction rolled back')
+        }
+    } catch (error) {
+        errorConsole('Rollback error: ' + error.message)
+        throw error
+    } finally {
+        try {
+            await connection.close()
+        } catch (closeError) {
+            errorConsole('Error closing connection after rollback: ' + closeError.message)
+        }
+    }
 }
-
-
-/**
- * Convert stream into string
- * @param { Stream } - Stream input
- * @returns { Promise< string > }
- */
-streamToString = (stream) => {
-  return new Promise((resolve, reject) => {
-    let data = '';
-    stream.setEncoding('utf8');
-
-    stream.on('data', chunk => data += chunk);
-    stream.on('end', () => resolve(data));
-    stream.on('error', reject);
-  });
-};
-
-/**
- * Read clob object into string
- * @param { * } - Clob
- * @returns { Promise< string > }
- */
-readClobValue = async (clob) => {
-  if (clob === null) return null;
-  if (typeof clob === 'string') return clob;
-  const content = await streamToString(clob);
-  clob.destroy?.();
-  return content;
-};
-
-
-
-/**
- * Execute SQL with CLOB column reading support
- * @param { string } query - SQL Query
- * @param { object | null} params - Binding parameter
- * @param { Array<string> } clobColumnNames - Array of CLOB column names
- * @param { import('oracledb').ExecuteOptions } options
- * @param { string } poolAlias - Pool alias
- * @param { { log: boolean } } customOption - Custom option
- * @returns { Promise< import('oracledb').Result > }
- *
- * @example
- *      oraexecAndReadClob('SELECT * FROM BLOGS FETCH FIRST 1 ROWS ONLY', {}, ['CONTENT'])
- *          .then((r) => {
- *              this.result = r.rows;
- *          })
- *          .catch((err) => {
- *          })
- */
-exports.oraexecAndReadClob = async (query, params, clobColumnNames = [], options, poolAlias, customOption) => {
-    options              = options || {}
-    poolAlias            = poolAlias || 'default'
-    const { log = true } = customOption ?? {}
-    return new Promise((resolve, reject) => {
-        const pool           = oracledb.getPool(poolAlias)
-
-        pool.getConnection((err, connection) => {
-            if (err) {
-                reject(err)
-                return
-            }
-
-            let bindings = queryBindToString(query, params)
-            if (log && env.includes('dev', 'devel', 'development')) {
-                sqlLogConsole(bindings)
-            }
-
-            connection.execute(query, params, {
-                outFormat : oracledb.OBJECT,
-                autoCommit: true,
-                ...options
-            }).then((queryResult) => {
-                clobColumnNames   = clobColumnNames.map(name => `${name}`.toUpperCase())
-                Promise.all(
-                    queryResult.rows.map(async row => {
-                        for (const clobColumnName of clobColumnNames) {
-                            if (!Object.keys(row).includes(clobColumnName))
-                            throw new Error(`Column ${clobColumnName} tidak ditemukan dalam hasil query`)
-                            row[clobColumnName] = await readClobValue(row[clobColumnName])
-                        }
-                        return row
-                    }),
-                )
-                .then((result) => {
-                    resolve({
-                        implicitResults: queryResult.implicitResults,
-                        lastRowid      : queryResult.lastRowid,
-                        metaData       : queryResult.metaData,
-                        outBinds       : queryResult.outBinds,
-                        resultSet      : queryResult.resultSet,
-                        rows           : result,
-                        rowsAffected   : queryResult.rowsAffected,
-                        warning        : queryResult.warning
-                    });
-                })
-                .finally(() => {
-                    connection.close();
-                });
-            })
-            .catch((err) => {
-                connection.close();
-                reject(err)
-            })
-        })
-    })
-};
