@@ -35,6 +35,10 @@ This module reads environment variables for configuration. If environment variab
 
 ### Client Configuration
 * **THIN_MODE**: enable Oracle thin client mode. (default: `true`)
+* **ORACLE_CLIENT_LIB_DIR**: path to Oracle Client libraries. (Optional, required only if `THIN_MODE=false`).
+
+### Environment & Logging (New)
+* **NODE_ENV**: set to `dev`, `devel`, or `development` to enable SQL logs and execution timers. Any other value (e.g., `production`) will mask SQL strings for security.
 
 ### Built-in Monitoring (New Feature)
 * **ORACLE_POOL_MONITORING**: enable automatic pool monitoring. (default: `false`)
@@ -126,6 +130,31 @@ Use specific pool:
 let result = await oraexec(sql, param, 'hrpool')
 ```
 
+Advanced: Custom Execution Options
+
+By default, the library uses the following settings if `options` is not provided:
+*   `outFormat`: `oracledb.OBJECT` (Results are returned as objects instead of arrays).
+*   `autoCommit`: `true` for `oraexec`, and `false` for transaction methods.
+
+```js
+// Example 1: Fetch a specific column as string and limit rows
+const options = {
+    fetchInfo: { "COMMISSION_PCT": { type: oracledb.STRING } },
+    maxRows: 100
+}
+let result = await oraexec(sql, param, 'default', options)
+
+// Example 2: Use ResultSet for large data sets
+const rsOptions = { resultSet: true }
+const rsResult = await oraexec(sql, param, 'default', rsOptions)
+// Use rsResult.resultSet...
+
+// Example 3: Disable auto-commit for single query
+const manualOptions = { autoCommit: false }
+const res = await oraexec(sql, param, 'default', manualOptions)
+// Manual commit required via begintrans connection or other means
+```
+
 ### Transaction Execution
 
 For multiple SQL statements with automatic rollback on failure:
@@ -136,18 +165,18 @@ const { oraexectrans } = require('oracledbexec')
 try {
     let queries = []
     queries.push({
-        query: `INSERT INTO countries VALUES (:country_id, :country_name)`, 
+        query: `INSERT INTO countries VALUES (:country_id, :country_name)`,
         parameters: {country_id: 'ID', country_name: 'Indonesia'}
     })
     queries.push({
-        query: `INSERT INTO countries VALUES (:country_id, :country_name)`, 
+        query: `INSERT INTO countries VALUES (:country_id, :country_name)`,
         parameters: {country_id: 'JP', country_name: 'Japan'}
     })
     queries.push({
-        query: `INSERT INTO countries VALUES (:country_id, :country_name)`, 
+        query: `INSERT INTO countries VALUES (:country_id, :country_name)`,
         parameters: {country_id: 'CN', country_name: 'China'}
     })
-    
+
     await oraexectrans(queries)
     console.log('All queries executed successfully')
 } catch (err) {
@@ -182,7 +211,7 @@ try {
     // Process result and execute second query
     sql = `INSERT INTO sometable VALUES (:name, :country_name)`
     param = {
-        name: 'Some Name', 
+        name: 'Some Name',
         country_name: result.rows[0].country_name
     }
     await exectrans(session, sql, param)
@@ -190,7 +219,7 @@ try {
     // Commit transaction
     await committrans(session)
     console.log('Transaction committed successfully')
-    
+
 } catch (err) {
     // Rollback on error
     if (session) {
@@ -207,7 +236,7 @@ let session = await begintrans('hrpool')
 
 ### Graceful Shutdown
 
-Properly close connection pools when your application shuts down:
+Properly close connection pools when your application shuts down. You can close a specific pool by passing its alias, or leave it empty to close **all** active pools.
 
 ```js
 const { close } = require('oracledbexec')
@@ -216,11 +245,16 @@ const { close } = require('oracledbexec')
 process.on('SIGINT', async () => {
     console.log('Shutting down gracefully...')
     try {
+        // Close all active pools
         await close()
-        console.log('Database pool closed')
+
+        // OR close a specific pool:
+        // await close('hrpool')
+
+        console.log('Database pools closed')
         process.exit(0)
     } catch (err) {
-        console.error('Error closing pool:', err.message)
+        console.error('Error closing pools:', err.message)
         process.exit(1)
     }
 })
@@ -246,27 +280,30 @@ POOL_TIMEOUT=120
 # Queue settings
 QUEUE_MAX=50
 QUEUE_TIMEOUT=5000
-
-# Enable monitoring
-ORACLE_POOL_MONITORING=true
+THIN_MODE=true # or false
+ORACLE_CLIENT_LIB_DIR=/path/to/oracle_instant_client_home_dir # (Optional) Required only if THIN_MODE=false
+ORACLE_POOL_MONITORING=true # or false
 ORACLE_MONITOR_INTERVAL=30000
 
 # Use thin client
 THIN_MODE=true
 ```
 
-### Error Handling
+### Error Handling & Observability (Improved)
 
-All functions throw errors that should be caught:
+All functions throw errors that should be caught. Version 1.9.0+ adds advanced diagnostics:
+
+- **Caller Tracing**: Error logs show exactly which file and line number in your application triggered the error.
+- **SQL Snippets**: In Production Mode, error logs include the first 50 characters of the failing SQL to help identify the query without exposing sensitive data.
+- **Correlation IDs**: Logs are tagged with `[QID:XXXX]` or `[TXID:XXXX]` to link SQL execution with its duration, even during high concurrency.
+- **Execution Timing**: Dev Mode displays `⏱️ Execution time` for every query.
 
 ```js
-const { oraexec } = require('oracledbexec')
-
 try {
     const result = await oraexec('SELECT * FROM invalid_table')
 } catch (error) {
+    // Log will show: 🔥 SQL Execution error at user.controller.js:42 [SQL: SELECT * FROM...] : ORA-XXXXX
     console.error('Database error:', error.message)
-    // Handle error appropriately
 }
 ```
 
@@ -283,28 +320,40 @@ The library automatically manages connections and prevents leaks:
 
 | Function | Description | Parameters | Returns |
 |----------|-------------|------------|---------|
-| `initialize(config?)` | Initialize connection pool | Optional config object | Promise<void> |
-| `close()` | Close connection pool | None | Promise<void> |
-| `oraexec(sql, params?, poolAlias?)` | Execute single query | SQL string, parameters, pool alias | Promise<result> |
-| `oraexectrans(queries, poolAlias?)` | Execute transaction | Array of queries, pool alias | Promise<results[]> |
-| `begintrans(poolAlias?)` | Start manual transaction | Pool alias | Promise<connection> |
-| `exectrans(connection, sql, params?)` | Execute in transaction | Connection, SQL, parameters | Promise<result> |
-| `committrans(connection)` | Commit transaction | Connection | Promise<void> |
-| `rollbacktrans(connection)` | Rollback transaction | Connection | Promise<void> |
-| `getPoolStats()` | Get pool statistics | None | Object |
+| `initialize(config?)` | Initialize connection pool | `config` (Optional) | `Promise<void>` |
+| `close(alias?)` | Close specific or all pools | `alias` (Optional) | `Promise<void>` |
+| `oraexec(sql, params?, alias?, options?)` | Execute single query | `sql`, `params`, `alias`, `options` | `Promise<result>` |
+| `oraexectrans(queries, alias?, options?)` | Execute transaction | `queries`, `alias`, `options` | `Promise<results[]>` |
+| `begintrans(alias?)` | Start manual transaction | `alias` (Optional) | `Promise<connection>` |
+| `exectrans(conn, sql, params?, options?)` | Execute in transaction | `conn`, `sql`, `params`, `options` | `Promise<result>` |
+| `committrans(connection)` | Commit transaction | `connection` | `Promise<void>` |
+| `rollbacktrans(connection)` | Rollback transaction | `connection` | `Promise<void>` |
+| `getPoolStats(alias?)` | Get custom pool stats | `alias` (Optional) | `Object` |
+| `getPoolStatisticsRealtime(alias?)` | Get raw Oracle stats in realtime | `alias` (Optional) | `Object` |
 
 ### Built-in Monitoring
 
 When `ORACLE_POOL_MONITORING=true`:
-- Automatic health checks every 30 seconds (configurable)
-- Warnings when pool usage > 80%
-- Alerts when pool is exhausted
-- Connection statistics tracking
-- Error logging and history
+- Automatic health checks every 30 seconds by default.
+- Customize frequency using `ORACLE_MONITOR_INTERVAL` (in milliseconds).
+- Warnings when pool usage > 80% (logged every 10 checks to avoid spam).
+- Alerts when pool is exhausted.
+- Connection statistics tracking (Busy, Free, Queued).
+- Error logging and history tracking (last 10 errors).
 
 ## Changelog
 
-### Version 1.8.1+ (Latest Improvements)
+### Version 2.0.0 (Major Modernization)
+- ✅ **Caller Source Tracing**: Implemented `_getCaller` to trace filename and line number in every error log.
+- ✅ **Query Correlation (QID/TXID)**: Unique ID tagging on every log to distinguish parallel query executions.
+- ✅ **Smart Execution Timers**: Automated duration unit conversion (ms/s) linked by Query ID.
+- ✅ **Flexible Execution Options**: Added `options` parameter support for core functions (`oraexec`, `oraexectrans`, etc.).
+- ✅ **Enhanced Production Logging**: Sensitive SQL protection using `_shortSql` in production error logs.
+- ✅ **Multi-Pool Lifecycle**: Improved `close()` function to support closing all active pools simultaneously.
+- ✅ **Thread Pool Optimization**: Relocated `UV_THREADPOOL_SIZE` for earlier engine initialization.
+- ✅ **Professional Testing**: Integrated Jest test suite for comprehensive coverage.
+
+### Version 1.8.1 (Legacy)
 - ✅ **Production-optimized defaults**: Conservative pool sizing (2-8 connections)
 - ✅ **Built-in monitoring**: Optional automatic pool health monitoring
 - ✅ **Enhanced error handling**: Guaranteed connection cleanup
@@ -319,7 +368,7 @@ That's all.
 
 If you find this useful, please ⭐ the repository. Any feedback is welcome.
 
-You can contribute or you want to, feel free to [**Buy me a coffee! :coffee:**](https://saweria.co/thesuhu), I will be really thankfull for anything even if it is a coffee or just a kind comment towards my work, because that helps me a lot.
+If you find this project helpful, feel free to [**Buy me a coffee! :coffee:**](https://saweria.co/thesuhu). I would be really thankful for your support, whether it's a coffee or just a kind comment, as it helps me a lot in maintaining this work.
 
 ## License
 
