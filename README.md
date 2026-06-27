@@ -11,6 +11,18 @@ Running Oracle queries made easier.
 npm install oracledbexec --save
 ```
 
+## What's New in v2.0.0
+
+Version `2.0.0` promotes `oracledbexec` to a production-ready release with a stronger runtime model, safer logging defaults, and better debugging support.
+
+- **Async/Await Architecture**: the core execution flow now uses async/await consistently for cleaner non-blocking query handling.
+- **Smart Threading**: `UV_THREADPOOL_SIZE` is automatically aligned with `POOL_MAX` at startup to reduce Oracle driver bottlenecks.
+- **Multi-Pool Support**: multiple Oracle pools can be initialized and managed in parallel through pool aliases.
+- **High Observability**: query logs include `QID`/`TXID` correlation IDs, caller tracing, and execution timing in development mode.
+- **Safer Configuration**: numeric environment variables are validated with `safeParseInt` to avoid bad `0`, negative, or invalid values.
+- **Guaranteed Cleanup**: connections are always closed in `finally` blocks, including failure paths.
+- **Monitoring & Packaging**: built-in pool monitoring supports aliased pools, and the published package is limited to runtime files needed on npm.
+
 ## Environment Variables
 
 This module reads environment variables for configuration. If environment variables are not found, default values will be used. You can also pass database configuration parameters when initializing the module.
@@ -38,7 +50,8 @@ This module reads environment variables for configuration. If environment variab
 * **ORACLE_CLIENT_LIB_DIR**: path to Oracle Client libraries. (Optional, required only if `THIN_MODE=false`).
 
 ### Environment & Logging (New)
-* **NODE_ENV**: set to `dev`, `devel`, or `development` to enable SQL logs and execution timers. Any other value (e.g., `production`) will mask SQL strings for security.
+* **NODE_ENV**: set to `dev`, `devel`, or `development` to enable full SQL logs and execution timers. Any other value (for example `production`) disables verbose SQL logging and limits error output to short SQL snippets.
+* **UV_THREADPOOL_SIZE**: automatically set by the library based on `POOL_MAX` (`POOL_MAX + 4`). In most cases you do not need to manage it manually.
 
 ### Built-in Monitoring (New Feature)
 * **ORACLE_POOL_MONITORING**: enable automatic pool monitoring. (default: `false`)
@@ -78,6 +91,26 @@ let dbconfig = {
 await oracledbexec.initialize(dbconfig)
 ```
 
+Initialize more than one pool:
+
+```js
+const oracledbexec = require('oracledbexec')
+
+await oracledbexec.initialize({
+    user: 'hr',
+    password: 'hr',
+    connectString: 'localhost:1521/XEPDB1',
+    poolAlias: 'main'
+})
+
+await oracledbexec.initialize({
+    user: 'reporting',
+    password: 'secret',
+    connectString: 'localhost:1521/XEPDB1',
+    poolAlias: 'reporting'
+})
+```
+
 ### Built-in Pool Monitoring (New Feature)
 
 Enable automatic pool monitoring by setting environment variable:
@@ -106,6 +139,9 @@ Output:
   errors: []
 }
 */
+
+// Get monitoring stats for a specific pool alias
+const reportingStats = getPoolStats('reporting')
 ```
 
 ### Single Query Execution
@@ -291,12 +327,12 @@ THIN_MODE=true
 
 ### Error Handling & Observability (Improved)
 
-All functions throw errors that should be caught. Version 1.9.0+ adds advanced diagnostics:
+All functions throw errors that should be caught. Version `2.0.0` adds advanced diagnostics:
 
 - **Caller Tracing**: Error logs show exactly which file and line number in your application triggered the error.
-- **SQL Snippets**: In Production Mode, error logs include the first 50 characters of the failing SQL to help identify the query without exposing sensitive data.
+- **Short SQL Snippets**: Error logs include a compact SQL preview to help identify the failing statement without printing long query text.
 - **Correlation IDs**: Logs are tagged with `[QID:XXXX]` or `[TXID:XXXX]` to link SQL execution with its duration, even during high concurrency.
-- **Execution Timing**: Dev Mode displays `⏱️ Execution time` for every query.
+- **Execution Timing**: Dev mode displays per-query execution duration, and transaction mode logs both query-level and total transaction timing.
 
 ```js
 try {
@@ -331,6 +367,14 @@ The library automatically manages connections and prevents leaks:
 | `getPoolStats(alias?)` | Get custom pool stats | `alias` (Optional) | `Object` |
 | `getPoolStatisticsRealtime(alias?)` | Get raw Oracle stats in realtime | `alias` (Optional) | `Object` |
 
+### Behavior Notes
+
+- `initialize(customConfig)` performs a shallow merge over environment-based defaults, so only provided keys override the base configuration.
+- `oraexec(sql, params, alias, options)` is backward compatible and now accepts Oracle execution `options`.
+- `oraexectrans(queries, alias, options)` also accepts execution `options`, while keeping `autoCommit: false`.
+- `getPoolStats(alias?)` can inspect a specific pool alias and returns a friendly status object when monitoring is disabled.
+- `close()` closes all active pools when no alias is provided.
+
 ### Built-in Monitoring
 
 When `ORACLE_POOL_MONITORING=true`:
@@ -340,6 +384,21 @@ When `ORACLE_POOL_MONITORING=true`:
 - Alerts when pool is exhausted.
 - Connection statistics tracking (Busy, Free, Queued).
 - Error logging and history tracking (last 10 errors).
+- Each initialized pool alias gets its own monitor instance.
+
+## Testing
+
+Version `2.0.0` includes a Jest-based test suite covering:
+
+- single query execution
+- custom execution options
+- invalid SQL error handling
+- transaction execution
+- manual transaction lifecycle
+- built-in pool stats
+- realtime pool statistics access
+
+Release verification for `v2.0.0` targets `7/7` passing tests, including decimal handling checks such as `.5` versus `0.5`, plus clean process exit after the suite finishes.
 
 ## Changelog
 
@@ -351,9 +410,11 @@ When `ORACLE_POOL_MONITORING=true`:
 - ✅ **Query Correlation (QID/TXID)**: Unique ID tagging on every log to distinguish parallel query executions.
 - ✅ **Smart Execution Timers**: Automated duration unit conversion (ms/s) linked by Query ID.
 - ✅ **Flexible Execution Options**: Added `options` parameter support for core functions (`oraexec`, `oraexectrans`, etc.).
-- ✅ **Enhanced Production Logging**: Sensitive SQL protection using `_shortSql` in production error logs.
+- ✅ **Safer Error Logging**: Compact SQL snippets are used in error logs to avoid dumping long statements.
 - ✅ **Multi-Pool Lifecycle**: Improved `close()` function to support closing all active pools simultaneously.
 - ✅ **Thread Pool Optimization**: Relocated `UV_THREADPOOL_SIZE` for earlier engine initialization.
+- ✅ **Configuration Hardening**: Numeric environment variables are validated with `safeParseInt`.
+- ✅ **Guaranteed Cleanup**: Connection close paths are enforced across single-query and transaction flows.
 - ✅ **Professional Testing**: Integrated Jest test suite for comprehensive coverage.
 
 ### Version 1.8.1 (Legacy)
