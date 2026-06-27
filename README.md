@@ -343,6 +343,9 @@ When `ORACLE_POOL_MONITORING=true`:
 
 ## Changelog
 
+### Version 2.0.1
+- ✅ **Bug Fixing**: `_logQuery` on `oraexectrans` always throw sql parameters errors
+
 ### Version 2.0.0 (Major Modernization)
 - ✅ **Caller Source Tracing**: Implemented `_getCaller` to trace filename and line number in every error log.
 - ✅ **Query Correlation (QID/TXID)**: Unique ID tagging on every log to distinguish parallel query executions.
